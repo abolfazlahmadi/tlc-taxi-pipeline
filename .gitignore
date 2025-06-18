@@ -1,3 +1,17 @@
+# === Data folders ===
+data/
+etl_logs/
+output/
+*.avro
+*.parquet
+*.csv
+*.xlsx
+
+# === Environment / Dependency Files ===
+.env
+.venv/
+Pipfile.lock
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
