@@ -2,85 +2,48 @@ import os
 from pathlib import Path
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, hour, date_format, year
-from pyspark.sql.types import StructType, StructField, LongType, DoubleType, TimestampType, StringType, IntegerType
+from pyspark.sql.types import LongType, DoubleType, IntegerType
 
 
-def get_yellow_schema():
-    return StructType([
-        StructField("VendorID", LongType(), True),
-        StructField("tpep_pickup_datetime", TimestampType(), True),
-        StructField("tpep_dropoff_datetime", TimestampType(), True),
-        StructField("passenger_count", IntegerType(), True),
-        StructField("trip_distance", DoubleType(), True),
-        StructField("RatecodeID", DoubleType(), True),
-        StructField("store_and_fwd_flag", StringType(), True),
-        StructField("PULocationID", LongType(), True),
-        StructField("DOLocationID", LongType(), True),
-        StructField("payment_type", IntegerType(), True),
-        StructField("fare_amount", DoubleType(), True),
-        StructField("extra", DoubleType(), True),
-        StructField("mta_tax", DoubleType(), True),
-        StructField("tip_amount", DoubleType(), True),
-        StructField("tolls_amount", DoubleType(), True),
-        StructField("improvement_surcharge", DoubleType(), True),
-        StructField("total_amount", DoubleType(), True),
-        StructField("congestion_surcharge", DoubleType(), True),
-        StructField("airport_fee", DoubleType(), True)
-    ])
-
-
-def get_green_schema():
-    return StructType([
-        StructField("VendorID", LongType(), True),
-        StructField("lpep_pickup_datetime", TimestampType(), True),
-        StructField("lpep_dropoff_datetime", TimestampType(), True),
-        StructField("store_and_fwd_flag", StringType(), True),
-        StructField("RatecodeID", DoubleType(), True),
-        StructField("PULocationID", LongType(), True),
-        StructField("DOLocationID", LongType(), True),
-        StructField("passenger_count", IntegerType(), True),
-        StructField("trip_distance", DoubleType(), True),
-        StructField("fare_amount", DoubleType(), True),
-        StructField("extra", DoubleType(), True),
-        StructField("mta_tax", DoubleType(), True),
-        StructField("tip_amount", DoubleType(), True),
-        StructField("tolls_amount", DoubleType(), True),
-        StructField("ehail_fee", IntegerType(), True),
-        StructField("improvement_surcharge", DoubleType(), True),
-        StructField("total_amount", DoubleType(), True),
-        StructField("payment_type", IntegerType(), True),
-        StructField("trip_type", DoubleType(), True),
-        StructField("congestion_surcharge", DoubleType(), True)
-    ])
-
-
-def read_and_transform_spark_data(raw_dir="data/raw") -> 'DataFrame':
+def read_and_transform_spark_data3(raw_dir="data/raw") -> 'DataFrame':
     spark = SparkSession.builder.appName("TLC_ETL_ReadTransform").getOrCreate()
     df_all = None
 
     for taxi_type in ["yellow", "green"]:
-        taxi_path = os.path.join(raw_dir, taxi_type)
-        if not Path(taxi_path).exists():
-            print(f"[SKIP] Missing folder: {taxi_path}")
+        folder = Path(raw_dir) / taxi_type
+        if not folder.exists():
             continue
 
-        schema = get_yellow_schema() if taxi_type == "yellow" else get_green_schema()
-        df = spark.read.schema(schema).parquet(taxi_path)
+        for file_path in folder.glob("*.parquet"):
+            print(f"[READING] {file_path.name}")
+            df = spark.read.parquet(str(file_path))
 
-        # Rename pickup column to unify
-        pickup_col = "tpep_pickup_datetime" if taxi_type == "yellow" else "lpep_pickup_datetime"
-        df = df.withColumnRenamed(pickup_col, "pickup_datetime")
+            # Rename pickup column
+            if taxi_type == "yellow" and "tpep_pickup_datetime" in df.columns:
+                df = df.withColumnRenamed("tpep_pickup_datetime", "pickup_datetime")
+            elif taxi_type == "green" and "lpep_pickup_datetime" in df.columns:
+                df = df.withColumnRenamed("lpep_pickup_datetime", "pickup_datetime")
+            else:
+                print(f"[SKIP] No pickup column found in: {file_path.name}")
+                continue
 
-        # Enrich with time and type
-        df = df.withColumn("pickup_hour", hour("pickup_datetime")) \
-               .withColumn("pickup_weekday", date_format("pickup_datetime", "E")) \
-               .withColumn("pickup_year", year("pickup_datetime")) \
-               .withColumn("taxi_type", col("VendorID") * 0 + (1 if taxi_type == "yellow" else 2))
+            # Cast known problematic columns
+            df = df.withColumn("VendorID", col("VendorID").cast(LongType()))
+            df = df.withColumn("passenger_count", col("passenger_count").cast(IntegerType()))
+            df = df.withColumn("trip_distance", col("trip_distance").cast(DoubleType()))
+            df = df.withColumn("fare_amount", col("fare_amount").cast(DoubleType()))
+            df = df.withColumn("tip_amount", col("tip_amount").cast(DoubleType()))
+            df = df.withColumn("total_amount", col("total_amount").cast(DoubleType()))
 
-        # Merge with final DataFrame
-        df_all = df if df_all is None else df_all.unionByName(df, allowMissingColumns=True)
+            # Add time-based columns and taxi_type
+            df = df.withColumn("pickup_hour", hour("pickup_datetime")) \
+                   .withColumn("pickup_weekday", date_format("pickup_datetime", "E")) \
+                   .withColumn("pickup_year", year("pickup_datetime")) \
+                   .withColumn("taxi_type", col("VendorID") * 0 + (1 if taxi_type == "yellow" else 2))
+
+            df_all = df if df_all is None else df_all.unionByName(df, allowMissingColumns=True)
 
     if df_all is None:
-        raise ValueError("No files loaded. Check data/raw folders and schemas.")
-    
+        raise ValueError("No files could be read. Check data/raw/ folders.")
+
     return df_all
