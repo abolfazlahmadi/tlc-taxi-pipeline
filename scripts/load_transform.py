@@ -5,7 +5,7 @@ from pyspark.sql.functions import col, hour, date_format, year
 from pyspark.sql.types import LongType, DoubleType, IntegerType
 
 
-def read_and_transform_spark_data(raw_dir="data/raw") -> 'DataFrame':
+def read_and_transform_spark_data3(raw_dir="data/raw") -> 'DataFrame':
     spark = SparkSession.builder.appName("TLC_ETL_ReadTransform").getOrCreate()
     df_all = None
 
